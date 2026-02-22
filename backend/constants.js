@@ -1,0 +1,12 @@
+const MESSAGE_TYPES = Object.freeze({
+    JOIN_ROOM: 'JOIN_ROOM',
+    SEND_MESSAGE: 'SEND_MESSAGE',
+    TYPING: 'TYPING',
+    READ_RECEIPT: 'READ_RECEIPT',
+    ACK: 'ACK',
+    ERR_ACK: 'ERR_ACK',
+    SYSTEM: 'SYSTEM',
+    ROOM_MESSAGE: 'ROOM_MESSAGE',
+});
+
+module.exports = { MESSAGE_TYPES };
