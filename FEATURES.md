@@ -5,329 +5,207 @@ This file explains each feature in simple language.
 ---
 
 ## 1) Authentication (Register, Login, Logout)
-
-- **What this feature does (plain English):**
-  - Lets users create an account, sign in, and sign out.
-- **Why this feature exists (problem it solves):**
-  - Without login, anyone could pretend to be anyone.
-  - It protects user identity and private rooms.
-- **How it works conceptually:**
-  - You register with username and password.
-  - Password is stored as a hash (not plain text).
-  - On login, server creates a session token.
-  - On logout, server removes that session.
-- **Technologies involved:**
-  - React (login form)
-  - Express (HTTP APIs)
-  - MongoDB + Mongoose (users/sessions)
-  - bcrypt (password hashing)
-- **Where the logic lives:**
-  - Client: login/register/logout UI and API calls
-  - Server: validates credentials, creates/deletes sessions
-  - Database: stores users and sessions
-- **Short example scenario:**
-  - Tharun logs in, gets a token, chats, then clicks logout. Token is revoked and access ends.
-- **How to explain in an interview (2–3 lines):**
-  - “I used server-side sessions, not JWT. Login creates an opaque token stored in MongoDB, and logout revokes it. Passwords are hashed with bcrypt, so plain passwords are never stored.”
-
----
+- **What this feature does:** lets users create account, sign in, and sign out.
+- **Why this exists:** prevents identity spoofing and protects private data.
+- **How it works:** register stores hashed password; login creates session token; logout revokes token.
+- **Technologies:** React, Express, MongoDB/Mongoose, bcrypt.
+- **Where logic lives:** client (forms), server (validation/session), database (`users`, `sessions`).
+- **Example:** user logs in, chats, logs out, session no longer works.
+- **Interview (2–3 lines):** “I used server-side sessions, not JWT. Login creates an opaque token stored in MongoDB, and logout revokes it. Passwords are hashed with bcrypt.”
+- **Minimal code syntax:**
+```js
+app.post('/login', async (req, res) => {
+  const token = createSessionToken();
+  await Session.create({ token, userId, expiresAt });
+  res.json({ token });
+});
+```
 
 ## 2) Session Token in localStorage
-
-- **What this feature does (plain English):**
-  - Keeps you signed in after page refresh.
-- **Why this feature exists (problem it solves):**
-  - Without it, user must log in every time the page reloads.
-- **How it works conceptually:**
-  - After login, token is saved in localStorage.
-  - On app start, frontend reads token and reconnects.
-  - On logout or invalid session, token is removed.
-- **Technologies involved:**
-  - React
-  - Browser localStorage API
-- **Where the logic lives:**
-  - Client only
-- **Short example scenario:**
-  - User refreshes the browser and is still logged in automatically.
-- **How to explain in an interview (2–3 lines):**
-  - “I persist the session token in localStorage for smooth user experience. On startup, the app restores the token and reconnects. On logout, I clear storage and close the socket.”
-
----
+- **What this feature does:** keeps user signed in after refresh.
+- **Why this exists:** avoids repeated login on every page reload.
+- **How it works:** save token after login; restore on app load; remove on logout.
+- **Technologies:** React, browser localStorage.
+- **Where logic lives:** client only.
+- **Example:** refresh browser and stay logged in.
+- **Interview:** “I persisted the session token in localStorage for better UX. App startup restores token and reconnects; logout clears token and socket.”
+- **Minimal code syntax:**
+```js
+localStorage.setItem('chat.sessionToken', token);
+const token = localStorage.getItem('chat.sessionToken');
+localStorage.removeItem('chat.sessionToken');
+```
 
 ## 3) WebSocket Connection with Session Authentication
-
-- **What this feature does (plain English):**
-  - Opens a real-time connection so messages appear instantly.
-- **Why this feature exists (problem it solves):**
-  - HTTP polling is slower and more expensive for chat.
-- **How it works conceptually:**
-  - Client connects to `ws://...?...token=...`.
-  - Server verifies token once at connection time.
-  - If valid, server attaches user identity to socket.
-  - If invalid/expired, server rejects the connection.
-- **Technologies involved:**
-  - WebSocket (`ws` library)
-  - Express + Node HTTP server
-  - MongoDB sessions
-- **Where the logic lives:**
-  - Client: creates socket
-  - Server: validates token and manages socket metadata
-  - Database: session lookup
-- **Short example scenario:**
-  - User’s token expires; next socket connect is rejected, forcing proper re-login.
-- **How to explain in an interview (2–3 lines):**
-  - “I authenticate WebSocket using the same server-side session token from HTTP login. The server resolves identity and stores it on socket metadata. Client cannot set username manually.”
-
----
+- **What this feature does:** enables instant real-time messaging.
+- **Why this exists:** real-time chat is faster than polling.
+- **How it works:** client connects with token query; server validates once and attaches identity.
+- **Technologies:** WebSocket (`ws`), Express/Node, MongoDB sessions.
+- **Where logic lives:** client (open socket), server (auth/metadata), database (session lookup).
+- **Example:** expired token causes socket rejection.
+- **Interview:** “WS auth reuses HTTP session token. Server resolves user identity on connect and never trusts client identity fields.”
+- **Minimal code syntax:**
+```js
+const ws = new WebSocket(`ws://localhost:6969?token=${token}`);
+const identity = await resolveAuthenticatedIdentity(token);
+if (!identity) ws.close(1008, 'Unauthorized');
+```
 
 ## 4) Reconnection Technique
-
-- **What this feature does (plain English):**
-  - Automatically reconnects when network drops.
-- **Why this feature exists (problem it solves):**
-  - Temporary internet issues should not break chat permanently.
-- **How it works conceptually:**
-  - Uses exponential backoff delays: 1s, 2s, 4s... up to a max.
-  - Keeps only one reconnect timer active.
-  - Rejoins rooms after successful reconnect.
-- **Technologies involved:**
-  - React state/refs
-  - Browser WebSocket
-- **Where the logic lives:**
-  - Client only
-- **Short example scenario:**
-  - Wi-Fi disconnects for 10 seconds, app reconnects and rejoins rooms automatically.
-- **How to explain in an interview (2–3 lines):**
-  - “I implemented reconnect with exponential backoff to avoid hammering the server. Once reconnected, the app rejoins prior rooms. I also prevent duplicate reconnect timers.”
-
----
+- **What this feature does:** auto-reconnects after connection drops.
+- **Why this exists:** temporary network issues should not break chat.
+- **How it works:** retry with exponential backoff and rejoin previous rooms.
+- **Technologies:** React refs/state, browser WebSocket.
+- **Where logic lives:** client.
+- **Example:** Wi-Fi drops for 10 seconds, app reconnects automatically.
+- **Interview:** “I used exponential backoff reconnect with one active timer. On reconnect, rooms are rejoined to restore live messaging quickly.”
+- **Minimal code syntax:**
+```js
+const delay = Math.min(1000 * 2 ** attempts, 30000);
+setTimeout(connectWebSocket, delay);
+```
 
 ## 5) Room Types and Visibility
-
-- **What this feature does (plain English):**
-  - Supports 3 room types:
-    - Public: everyone can see
-    - DM: only two participants
-    - Private group: only members
-- **Why this feature exists (problem it solves):**
-  - Different conversations need different privacy levels.
-- **How it works conceptually:**
-  - Room type and member list are stored in DB.
-  - Server checks access before allowing join.
-  - Banned users are blocked from joining.
-- **Technologies involved:**
-  - React (room creation UI)
-  - Express APIs
-  - MongoDB `rooms` collection
-- **Where the logic lives:**
-  - Client: create/select rooms
-  - Server: access checks
-  - Database: room metadata
-- **Short example scenario:**
-  - A private project room is visible only to invited team members.
-- **How to explain in an interview (2–3 lines):**
-  - “I modeled room privacy in the `rooms` collection with type and members. Join checks run server-side so client cannot bypass access. This supports public rooms, DMs, and private groups cleanly.”
-
----
+- **What this feature does:** supports `public`, `dm`, and `private` rooms.
+- **Why this exists:** different conversations need different privacy.
+- **How it works:** room metadata stores type/members; server checks membership before join.
+- **Technologies:** React, Express, MongoDB/Mongoose.
+- **Where logic lives:** client (create/select), server (rules), database (`rooms`).
+- **Example:** private project room visible only to invited members.
+- **Interview:** “Room privacy is modeled in DB and enforced server-side. Public is open, DM/private require membership checks.”
+- **Minimal code syntax:**
+```js
+if (room.type === 'public') return true;
+return room.members.some(id => id.toString() === userId.toString());
+```
 
 ## 6) Real-Time Chat Messages
-
-- **What this feature does (plain English):**
-  - Sends and receives chat messages instantly in joined rooms.
-- **Why this feature exists (problem it solves):**
-  - Chat should feel live without manual refresh.
-- **How it works conceptually:**
-  - Client sends `SEND_MESSAGE` with room + text.
-  - Server verifies user belongs to that room.
-  - Server broadcasts to all sockets in that room.
-  - Server saves message to DB.
-- **Technologies involved:**
-  - WebSocket
-  - Express/Node
-  - MongoDB `messages`
-- **Where the logic lives:**
-  - Client: send/display message
-  - Server: validate + broadcast
-  - Database: persistence
-- **Short example scenario:**
-  - Alice sends “hello” in `general`, all members in `general` see it immediately.
-- **How to explain in an interview (2–3 lines):**
-  - “Messages are real-time via WebSocket and persisted in MongoDB. The server is authoritative and checks room membership before broadcast. This keeps chat both fast and secure.”
-
----
+- **What this feature does:** sends and receives messages instantly in joined rooms.
+- **Why this exists:** live conversation without refresh.
+- **How it works:** client sends `SEND_MESSAGE`; server validates room membership and broadcasts.
+- **Technologies:** WebSocket, Express/Node, MongoDB.
+- **Where logic lives:** client (send/render), server (validate/broadcast), database (`messages`).
+- **Example:** Alice sends “hello” in `general`, all members get it immediately.
+- **Interview:** “Messages are event-driven via WebSocket and persisted in MongoDB. Server checks room membership before any broadcast.”
+- **Minimal code syntax:**
+```js
+socket.send(JSON.stringify({
+  type: 'SEND_MESSAGE',
+  payload: { roomId, text }
+}));
+```
 
 ## 7) Message Timestamps
-
-- **What this feature does (plain English):**
-  - Shows when each message was sent.
-- **Why this feature exists (problem it solves):**
-  - Users need time context to read conversations.
-- **How it works conceptually:**
-  - Message records contain `createdAt`.
-  - Server includes timestamp in payload.
-  - Client formats and displays time.
-- **Technologies involved:**
-  - MongoDB timestamps
-  - WebSocket payloads
-  - React UI formatting
-- **Where the logic lives:**
-  - Server + database for source timestamp
-  - Client for display format
-- **Short example scenario:**
-  - User sees “10:42 PM” next to a message and knows it was sent earlier.
-- **How to explain in an interview (2–3 lines):**
-  - “I include `createdAt` in message payloads and keep it in MongoDB for consistency. The frontend formats it for readability. This helps users follow conversation order and timing.”
-
----
+- **What this feature does:** shows when each message was sent.
+- **Why this exists:** provides conversation time context.
+- **How it works:** server includes `createdAt`; client formats and displays it.
+- **Technologies:** MongoDB timestamps, WebSocket payload, React UI.
+- **Where logic lives:** database + server (source time), client (display).
+- **Example:** message shows `10:42 PM`.
+- **Interview:** “I keep timestamps in DB and include them in real-time payloads so history and live messages stay consistent.”
+- **Minimal code syntax:**
+```js
+sendEvent(client, 'ROOM_MESSAGE', {
+  roomId, text, username, createdAt: new Date().toISOString()
+});
+```
 
 ## 8) Message History Pagination
-
-- **What this feature does (plain English):**
-  - Loads recent messages first, then older messages when requested.
-- **Why this feature exists (problem it solves):**
-  - Loading all messages at once is slow and heavy.
-- **How it works conceptually:**
-  - Endpoint returns last 50 messages by default.
-  - Client sends `before` cursor to fetch older messages.
-  - UI shows “Load older messages.”
-- **Technologies involved:**
-  - Express API
-  - MongoDB query with sort/limit
-  - React pagination state
-- **Where the logic lives:**
-  - Server: paginated query
-  - Client: cursor state + load button
-- **Short example scenario:**
-  - User opens room, sees latest 50 messages, clicks load older to continue reading.
-- **How to explain in an interview (2–3 lines):**
-  - “I implemented cursor-style pagination for chat history. The server returns a limited batch and the client requests older messages using a `before` value. This keeps performance stable.”
-
----
+- **What this feature does:** loads latest 50 first, then older messages.
+- **Why this exists:** avoids heavy initial loads.
+- **How it works:** endpoint supports `limit` and `before` cursor.
+- **Technologies:** Express API, MongoDB sort/limit, React state.
+- **Where logic lives:** server (query), client (load older button).
+- **Example:** user clicks “Load older messages” to continue reading.
+- **Interview:** “I implemented cursor-style pagination for chat history using `before` and `limit` for efficient scrolling.”
+- **Minimal code syntax:**
+```js
+const messages = await Message.find({ roomId, createdAt: { $lt: before } })
+  .sort({ createdAt: -1 })
+  .limit(50);
+```
 
 ## 9) Typing Indicators
-
-- **What this feature does (plain English):**
-  - Shows when someone is typing in the current room.
-- **Why this feature exists (problem it solves):**
-  - Gives live conversation feedback, making chat feel natural.
-- **How it works conceptually:**
-  - Client sends typing on/off events.
-  - Server broadcasts typing state to room members.
-  - Timeout auto-clears typing if no update arrives.
-- **Technologies involved:**
-  - WebSocket events
-  - React UI state
-  - Node timers
-- **Where the logic lives:**
-  - Client: emits typing while user types
-  - Server: timeout + broadcast
-- **Short example scenario:**
-  - “Bob is typing...” appears, then disappears after a few seconds of inactivity.
-- **How to explain in an interview (2–3 lines):**
-  - “Typing is an ephemeral WebSocket feature, not persisted. I broadcast typing status per room and use a timeout to auto-clear stale indicators. This keeps the UI responsive and clean.”
-
----
+- **What this feature does:** shows who is typing in current room.
+- **Why this exists:** improves conversational feel.
+- **How it works:** client emits typing on/off; server broadcasts and auto-clears stale typing.
+- **Technologies:** WebSocket events, Node timers, React state.
+- **Where logic lives:** client + server.
+- **Example:** “Bob is typing...” appears and disappears after inactivity.
+- **Interview:** “Typing is an ephemeral event, not persisted data. I broadcast per room and use timeout cleanup to prevent stale indicators.”
+- **Minimal code syntax:**
+```js
+socket.send(JSON.stringify({
+  type: 'TYPING',
+  payload: { roomId, isTyping: true }
+}));
+```
 
 ## 10) Read Receipts (Per Room)
-
-- **What this feature does (plain English):**
-  - Shows who has seen messages in a room.
-- **Why this feature exists (problem it solves):**
-  - Helps users know if teammates have read updates.
-- **How it works conceptually:**
-  - Client sends read event when room is active.
-  - Server broadcasts read receipt to room members.
-  - UI displays “Seen by ...”.
-- **Technologies involved:**
-  - WebSocket events
-  - React state
-- **Where the logic lives:**
-  - Client + server (real-time), optional DB extension later
-- **Short example scenario:**
-  - Team lead posts update and sees “Seen by Priya, Arun”.
-- **How to explain in an interview (2–3 lines):**
-  - “I implemented room-level read receipts with WebSocket events. The active room triggers receipt updates, and the server broadcasts to members only. This keeps visibility scoped and private.”
-
----
+- **What this feature does:** shows who has seen messages in a room.
+- **Why this exists:** helps teams confirm updates were read.
+- **How it works:** client sends receipt when room is active; server broadcasts to room.
+- **Technologies:** WebSocket events, React state.
+- **Where logic lives:** client + server.
+- **Example:** “Seen by Priya, Arun”.
+- **Interview:** “I added room-level read receipts through lightweight WS events scoped to room members.”
+- **Minimal code syntax:**
+```js
+socket.send(JSON.stringify({
+  type: 'READ_RECEIPT',
+  payload: { roomId }
+}));
+```
 
 ## 11) Search (Room, Username, Content)
-
-- **What this feature does (plain English):**
-  - Finds messages by room, sender name, or text.
-- **Why this feature exists (problem it solves):**
-  - Users need to find old information quickly.
-- **How it works conceptually:**
-  - Client sends query filters.
-  - Server checks accessible rooms first.
-  - Server returns matching messages from DB.
-- **Technologies involved:**
-  - Express endpoint
-  - MongoDB filters/regex
-  - React search panel
-- **Where the logic lives:**
-  - Client: search inputs/results UI
-  - Server: access check + query
-  - Database: message search
-- **Short example scenario:**
-  - User searches `room=general, username=alice, q=deadline` to find a specific update.
-- **How to explain in an interview (2–3 lines):**
-  - “Search is server-side with access control, so users only see rooms they can access. I support filters for room, username, and content. Results are fast and scoped securely.”
-
----
+- **What this feature does:** finds old messages by filters.
+- **Why this exists:** quickly locate important past information.
+- **How it works:** client sends filters; server checks access and returns matched messages.
+- **Technologies:** Express endpoint, MongoDB query/regex, React UI.
+- **Where logic lives:** client (form/results), server (filter/access), database (`messages`).
+- **Example:** search `room=general, q=deadline`.
+- **Interview:** “Search is server-side and access-controlled. I support room, username, and content filters while respecting room visibility.”
+- **Minimal code syntax:**
+```txt
+GET /search?roomId=general&username=alice&q=deadline
+```
 
 ## 12) Moderation (Kick / Ban for Private Groups)
-
-- **What this feature does (plain English):**
-  - Lets private group owner remove or ban members.
-- **Why this feature exists (problem it solves):**
-  - Groups need control over abuse or unwanted users.
-- **How it works conceptually:**
-  - Owner calls kick/ban endpoint.
-  - Server verifies owner and room type.
-  - Target user is removed from room membership.
-  - Ban also blocks future joins.
-- **Technologies involved:**
-  - Express moderation endpoints
-  - MongoDB room membership + banned list
-  - WebSocket system event broadcast
-- **Where the logic lives:**
-  - Server + database mainly
-  - Client provides moderation controls
-- **Short example scenario:**
-  - Owner bans a spam account from a private project room.
-- **How to explain in an interview (2–3 lines):**
-  - “Moderation is restricted to private-group owners. Kick removes membership, ban removes and blocks re-entry. I also broadcast a system message so members see the moderation action.”
-
----
+- **What this feature does:** lets private-group owner kick/ban users.
+- **Why this exists:** protects groups from abuse.
+- **How it works:** server verifies owner and room type, then updates membership/ban list.
+- **Technologies:** Express moderation APIs, MongoDB room membership, WebSocket system events.
+- **Where logic lives:** server + database (core), client (controls).
+- **Example:** owner bans spam user in private group.
+- **Interview:** “Moderation is owner-only and private-group-only. Kick removes membership; ban also prevents future join.”
+- **Minimal code syntax:**
+```txt
+POST /rooms/:roomId/kick
+POST /rooms/:roomId/ban
+Body: { "username": "targetUser" }
+```
 
 ## 13) Connection Status / Presence Basics
-
-- **What this feature does (plain English):**
-  - Shows whether your app is connected, reconnecting, or disconnected.
-- **Why this feature exists (problem it solves):**
-  - Users need clear feedback when messages may fail.
-- **How it works conceptually:**
-  - Client tracks WebSocket lifecycle events.
-  - UI badge updates in real time.
-  - Server sends system leave/join messages during connection changes.
-- **Technologies involved:**
-  - React state
-  - WebSocket lifecycle events
-- **Where the logic lives:**
-  - Client: status badge
-  - Server: room system messages
-- **Short example scenario:**
-  - Internet drops, badge changes to reconnecting, then back to connected.
-- **How to explain in an interview (2–3 lines):**
-  - “I surface WebSocket state directly in the UI so users understand connection health. Reconnect and disconnect states are explicit. This prevents silent failures and improves trust.”
+- **What this feature does:** shows connected/reconnecting/disconnected/error status.
+- **Why this exists:** users need feedback when sending may fail.
+- **How it works:** client listens to socket lifecycle and updates status badge.
+- **Technologies:** React state, WebSocket lifecycle.
+- **Where logic lives:** client UI + socket handlers.
+- **Example:** network drops → status changes to reconnecting.
+- **Interview:** “I exposed connection state in UI to avoid silent failures and improve user trust during network interruptions.”
+- **Minimal code syntax:**
+```js
+ws.onopen = () => setStatus('connected');
+ws.onclose = () => setStatus('disconnected');
+ws.onerror = () => setStatus('error');
+```
 
 ---
 
 ## Quick Full-System Flow (Step by Step)
-
-- User registers/logs in over HTTP.
+- User logs in over HTTP.
 - Server creates session token.
 - Client stores token and opens authenticated WebSocket.
-- User joins room (`JOIN_ROOM`) and sends messages (`SEND_MESSAGE`).
-- Server validates access, broadcasts events, and persists messages.
-- Client supports typing/read receipts/search/history/moderation through APIs and WebSocket events.
+- User joins room and sends messages.
+- Server validates access, broadcasts events, and persists history.
+- Client supports typing/read receipts/search/pagination/moderation.
