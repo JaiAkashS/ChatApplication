@@ -1,9 +1,14 @@
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 
 const User = require('../models/User');
 const Room = require('../models/Room');
 const { rooms, socketMeta } = require('../state');
 const { normalizeNonEmptyString } = require('../utils/strings');
+
+const generateInviteCode = () => {
+    return crypto.randomBytes(4).toString('hex');
+};
 
 const normalizeRoomType = (value) => {
     if (value === 'public' || value === 'dm' || value === 'private') {
@@ -28,11 +33,14 @@ const createRoomRecord = async ({ roomId, type, members, createdBy }) => {
         return room;
     }
 
+    const inviteCode = type === 'private' ? generateInviteCode() : undefined;
+
     return Room.create({
         roomId,
         type,
         members,
         createdBy,
+        inviteCode,
         createdAt: now,
         updatedAt: now,
     });
@@ -68,6 +76,7 @@ const removeUserFromRoom = (roomId, userId) => {
 const buildMemberObjectIds = (userIds) => userIds.map((id) => new mongoose.Types.ObjectId(id));
 
 module.exports = {
+    generateInviteCode,
     normalizeRoomType,
     resolveUserIdsByUsernames,
     createRoomRecord,

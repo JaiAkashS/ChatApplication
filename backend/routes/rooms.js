@@ -57,11 +57,14 @@ router.get('/rooms', async (req, res) => {
                 const memberNames = (room.members || [])
                     .map((memberId) => memberMap.get(memberId.toString()))
                     .filter(Boolean);
+                const isOwner = room.createdBy?.toString() === identity.userId.toString();
                 return {
                     roomId: room.roomId,
                     type: room.type,
                     members: memberNames,
                     updatedAt: room.updatedAt,
+                    inviteCode: (room.type === 'private' && isOwner) ? room.inviteCode : undefined,
+                    isOwner,
                 };
             }),
         });
@@ -116,6 +119,7 @@ router.post('/rooms', async (req, res) => {
                 room: {
                     roomId: existingRoom.roomId,
                     type: existingRoom.type,
+                    inviteCode: existingRoom.inviteCode || null,
                 },
             });
         }
@@ -131,10 +135,63 @@ router.post('/rooms', async (req, res) => {
             room: {
                 roomId: room.roomId,
                 type: room.type,
+                inviteCode: room.inviteCode || null,
             },
         });
     } catch (error) {
         console.error('Create room error:', error);
+        return res.status(500).json({ error: 'internal server error' });
+    }
+});
+
+// Join a private room using invite code
+router.post('/rooms/join-by-invite', async (req, res) => {
+    try {
+        const token = getAuthTokenFromRequest(req);
+        if (!token) {
+            return res.status(401).json({ error: 'missing session token' });
+        }
+
+        const identity = await resolveAuthenticatedIdentity(token);
+        if (!identity) {
+            return res.status(401).json({ error: 'invalid or expired session' });
+        }
+
+        const inviteCode = normalizeNonEmptyString(req.body?.inviteCode);
+        if (!inviteCode) {
+            return res.status(400).json({ error: 'inviteCode is required' });
+        }
+
+        const room = await Room.findOne({ inviteCode });
+        if (!room) {
+            return res.status(404).json({ error: 'invalid invite code' });
+        }
+
+        if (room.type !== 'private') {
+            return res.status(400).json({ error: 'invite codes are only for private rooms' });
+        }
+
+        // Check if user is banned
+        if (room.bannedMembers?.some((id) => id.toString() === identity.userId.toString())) {
+            return res.status(403).json({ error: 'you are banned from this room' });
+        }
+
+        // Check if already a member
+        const isMember = room.members?.some((id) => id.toString() === identity.userId.toString());
+        if (!isMember) {
+            room.members.push(identity.userId);
+            room.updatedAt = new Date();
+            await room.save();
+        }
+
+        return res.status(200).json({
+            room: {
+                roomId: room.roomId,
+                type: room.type,
+            },
+        });
+    } catch (error) {
+        console.error('Join by invite error:', error);
         return res.status(500).json({ error: 'internal server error' });
     }
 });

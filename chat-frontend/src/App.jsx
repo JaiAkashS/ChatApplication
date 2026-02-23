@@ -166,14 +166,11 @@ function App() {
   const [connectionStatus, setConnectionStatus] = useState("disconnected");
   const [historyLoadingByRoom, setHistoryLoadingByRoom] = useState({});
   const [hasMoreByRoom, setHasMoreByRoom] = useState({});
-  const [searchRoomId, setSearchRoomId] = useState("");
-  const [searchUsername, setSearchUsername] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [smartSearch, setSmartSearch] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchError, setSearchError] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
-  const [moderationRoomId, setModerationRoomId] = useState("");
-  const [moderationUsername, setModerationUsername] = useState("");
+  const [showSearchModal, setShowSearchModal] = useState(false);
   const [typingByRoom, setTypingByRoom] = useState({});
   const [readReceiptsByRoom, setReadReceiptsByRoom] = useState({});
 
@@ -621,7 +618,11 @@ function App() {
           const other = (room.members || []).find((name) => name !== username) || 'unknown';
           nextConversations[room.roomId] = { type: 'dm', with: other };
         } else if (room.type === 'private') {
-          nextConversations[room.roomId] = { type: 'private' };
+          nextConversations[room.roomId] = { 
+            type: 'private', 
+            inviteCode: room.inviteCode || null,
+            isOwner: room.isOwner || false,
+          };
         } else {
           nextConversations[room.roomId] = { type: 'public' };
         }
@@ -743,7 +744,7 @@ function App() {
         [roomId]: type === 'dm'
           ? { type: 'dm', with: memberList[0] || 'unknown' }
           : type === 'private'
-            ? { type: 'private' }
+            ? { type: 'private', inviteCode: body.room?.inviteCode }
             : { type: 'public' },
       }));
       joinRoom(roomId, { force: true });
@@ -752,13 +753,69 @@ function App() {
     }
   };
 
-  const searchMessages = async () => {
-    if (!sessionTokenRef.current) return;
+  const joinByInvite = async (inviteCode) => {
+    if (!inviteCode || !sessionTokenRef.current) return;
 
+    try {
+      const response = await fetch(`${API_BASE_URL}/rooms/join-by-invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionTokenRef.current}`,
+        },
+        body: JSON.stringify({ inviteCode }),
+      });
+
+      const body = await response.json();
+      if (!response.ok) {
+        setAuthError(body?.error || 'Failed to join room');
+        return;
+      }
+
+      const joinedRoomId = body.room?.roomId;
+      if (joinedRoomId) {
+        setConversations((prev) => ({
+          ...prev,
+          [joinedRoomId]: { type: 'private' },
+        }));
+        joinRoom(joinedRoomId, { force: true });
+        setActiveRoom(joinedRoomId);
+      }
+    } catch {
+      setAuthError('Failed to join room');
+    }
+  };
+
+  const parseSmartSearch = (query) => {
+    let roomId = '';
+    let username = '';
+    let text = '';
+    
+    const tokens = query.match(/(@\S+|#\S+|[^@#]+)/g) || [];
+    
+    for (const token of tokens) {
+      const trimmed = token.trim();
+      if (trimmed.startsWith('@')) {
+        username = trimmed.slice(1);
+      } else if (trimmed.startsWith('#')) {
+        roomId = trimmed.slice(1);
+      } else if (trimmed) {
+        text += (text ? ' ' : '') + trimmed;
+      }
+    }
+    
+    return { roomId, username, text: text.trim() };
+  };
+
+  const searchMessages = async (e) => {
+    if (e) e.preventDefault();
+    if (!sessionTokenRef.current || !smartSearch.trim()) return;
+
+    const { roomId, username, text } = parseSmartSearch(smartSearch);
     const params = new URLSearchParams();
-    if (searchRoomId.trim()) params.set('roomId', searchRoomId.trim());
-    if (searchUsername.trim()) params.set('username', searchUsername.trim());
-    if (searchQuery.trim()) params.set('q', searchQuery.trim());
+    if (roomId) params.set('roomId', roomId);
+    if (username) params.set('username', username);
+    if (text) params.set('q', text);
 
     setSearchLoading(true);
     setSearchError("");
@@ -783,10 +840,9 @@ function App() {
     }
   };
 
-  const kickMember = async () => {
+  const kickMember = async (roomId, targetUsername) => {
     if (!sessionTokenRef.current) return;
-    const roomId = moderationRoomId.trim() || activeRoom || '';
-    const target = moderationUsername.trim();
+    const target = targetUsername.trim();
     if (!roomId || !target) return;
 
     try {
@@ -807,10 +863,9 @@ function App() {
     }
   };
 
-  const banMember = async () => {
+  const banMember = async (roomId, targetUsername) => {
     if (!sessionTokenRef.current) return;
-    const roomId = moderationRoomId.trim() || activeRoom || '';
-    const target = moderationUsername.trim();
+    const target = targetUsername.trim();
     if (!roomId || !target) return;
 
     try {
@@ -829,16 +884,90 @@ function App() {
     } catch {
       setAuthError('Ban failed');
     }
+
   };
 
   return (
     <div className="app-container">
       <ConnectionStatus status={connectionStatus} />
 
+      <div className="chat-header">
+        <div className="chat-header-left">
+          <span className="room-icon">#</span>
+          <h2 className="room-title">{activeRoom || 'Select a room'}</h2>
+        </div>
+        {userSet && (
+          <div className="chat-header-right">
+            <button 
+              className="search-icon-btn" 
+              onClick={() => setShowSearchModal(true)}
+              title="Search messages"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M21.71 20.29L18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a1 1 0 0 0 1.42 0 1 1 0 0 0 0-1.39zM11 18a7 7 0 1 1 7-7 7 7 0 0 1-7 7z"/>
+              </svg>
+            </button>
+            <div className="user-avatar">{username.charAt(0).toUpperCase()}</div>
+            <span className="header-username">{username}</span>
+            <button className="logout-btn" onClick={logoutUser}>Logout</button>
+          </div>
+        )}
+      </div>
+
+      {showSearchModal && (
+        <div className="search-modal-overlay" onClick={() => setShowSearchModal(false)}>
+          <div className="search-modal" onClick={(e) => e.stopPropagation()}>
+            <form onSubmit={searchMessages} className="search-input-wrapper">
+              <svg className="search-input-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M21.71 20.29L18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a1 1 0 0 0 1.42 0 1 1 0 0 0 0-1.39zM11 18a7 7 0 1 1 7-7 7 7 0 0 1-7 7z"/>
+              </svg>
+              <input
+                type="text"
+                className="search-input"
+                placeholder="Search... @user #room or text"
+                value={smartSearch}
+                onChange={(e) => setSmartSearch(e.target.value)}
+                autoFocus
+              />
+              {searchLoading && <span className="search-spinner"></span>}
+            </form>
+            <div className="search-hints">
+              <span><code>@username</code> search by user</span>
+              <span><code>#room</code> search in room</span>
+              <span><code>text</code> search messages</span>
+            </div>
+            {searchError && <div className="search-error">{searchError}</div>}
+            {searchResults.length > 0 && (
+              <ul className="search-results-list">
+                {searchResults.map((result, index) => (
+                  <li 
+                    key={`${result.roomId}-${index}`}
+                    className="search-result-item"
+                    onClick={() => {
+                      setActiveRoom(result.roomId);
+                      setRoomId(result.roomId);
+                      joinRoom(result.roomId);
+                      setShowSearchModal(false);
+                    }}
+                  >
+                    <div className="search-result-header">
+                      <span className="search-result-room">#{result.roomId}</span>
+                      <span className="search-result-user">@{result.username}</span>
+                    </div>
+                    <div className="search-result-text">{result.text}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {!searchLoading && searchResults.length === 0 && smartSearch.trim() && !searchError && (
+              <div className="search-empty">Press Enter to search</div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="chat-area">
         <div className="left-column">
-          <h2>Minimal Chat</h2>
-
           <UserSetup
             userSet={userSet}
             username={username}
@@ -849,7 +978,6 @@ function App() {
             onPasswordChange={setPassword}
             onRegister={registerUser}
             onLogin={loginUser}
-            onLogout={logoutUser}
           />
 
           <Messages
@@ -874,6 +1002,7 @@ function App() {
             onMessageChange={handleMessageChange}
             onSendMessage={sendMessage}
             onStopTyping={() => stopTyping(roomId)}
+            activeRoom={activeRoom}
           />
         </div>
 
@@ -885,6 +1014,7 @@ function App() {
             onRoomIdChange={setRoomId}
             onJoinRoom={joinRoom}
             onCreateRoom={createRoom}
+            onJoinByInvite={joinByInvite}
             targetUser={targetUser}
             onTargetUserChange={setTargetUser}
             username={username}
@@ -900,6 +1030,8 @@ function App() {
             conversations={conversations}
             activeRoom={activeRoom}
             unreadCounts={unreadCounts}
+            onKickMember={kickMember}
+            onBanMember={banMember}
             onRoomSelect={(id) => {
               setActiveRoom(id);
               setRoomId(id);
@@ -910,57 +1042,6 @@ function App() {
               }));
             }}
           />
-
-          <div className="panel">
-            <h4>Search</h4>
-            <input
-              placeholder="room id (optional)"
-              value={searchRoomId}
-              onChange={(e) => setSearchRoomId(e.target.value)}
-            />
-            <input
-              placeholder="username (optional)"
-              value={searchUsername}
-              onChange={(e) => setSearchUsername(e.target.value)}
-            />
-            <input
-              placeholder="search text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            <button onClick={searchMessages} disabled={searchLoading}>Search</button>
-            {searchError && <div className="panel-error">{searchError}</div>}
-            {searchResults.length > 0 && (
-              <ul className="search-results">
-                {searchResults.map((result, index) => (
-                  <li key={`${result.roomId}-${index}`}>
-                    <span className="search-room">#{result.roomId}</span>
-                    <span className="search-user">{result.username}</span>
-                    <span className="search-text">{result.text}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          <div className="panel">
-            <h4>Moderation</h4>
-            <input
-              placeholder="room id (private)"
-              value={moderationRoomId}
-              onChange={(e) => setModerationRoomId(e.target.value)}
-            />
-            <input
-              placeholder="username"
-              value={moderationUsername}
-              onChange={(e) => setModerationUsername(e.target.value)}
-            />
-            <div className="panel-actions">
-              <button className="secondary" onClick={kickMember}>Kick</button>
-              <button className="secondary" onClick={banMember}>Ban</button>
-            </div>
-            <div className="panel-hint">Owner only. Private groups only.</div>
-          </div>
         </div>
       </div>
     </div>

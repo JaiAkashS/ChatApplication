@@ -13,6 +13,11 @@ const roomSchema = new mongoose.Schema({
         required: true,
         default: 'public',
     },
+    inviteCode: {
+        type: String,
+        unique: true,
+        sparse: true,
+    },
     members: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
