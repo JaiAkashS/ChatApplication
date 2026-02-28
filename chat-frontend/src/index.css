@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+/* ── Relayr Design Tokens ─────────────────────────────────────── */
+@theme {
+  /* Accent */
+  --color-blurple:        #5865f2;
+  --color-blurple-hover:  #4752c4;
+  --color-blurple-light:  #7983f5;
+
+  /* Status */
+  --color-status-green:   #3ba55d;
+  --color-status-green-light: #57f287;
+  --color-status-red:     #ed4245;
+  --color-status-red-light: #f38688;
+  --color-status-yellow:  #faa81a;
+
+  /* Surfaces (darkest → lightest) */
+  --color-surface-900:    #18191c;  /* floating / modals    */
+  --color-surface-800:    #202225;  /* body / bg-tertiary   */
+  --color-surface-700:    #2f3136;  /* sidebars             */
+  --color-surface-600:    #36393f;  /* chat area            */
+  --color-surface-500:    rgba(79, 84, 92, 0.4);  /* hover   */
+  --color-surface-400:    rgba(79, 84, 92, 0.6);  /* active  */
+  --color-surface-300:    rgba(79, 84, 92, 0.48); /* borders */
+
+  /* Text */
+  --color-content-primary:   #ffffff;
+  --color-content-secondary: #b9bbbe;
+  --color-content-normal:    #dcddde;
+  --color-content-muted:     #72767d;
+  --color-content-link:      #00aff4;
+
+  /* Typography */
+  --font-sans: 'gg sans', 'Noto Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+
+  /* Spacing extras */
+  --spacing-18: 4.5rem;
+}

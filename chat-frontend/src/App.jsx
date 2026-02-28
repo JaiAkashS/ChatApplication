@@ -1,11 +1,16 @@
 import { useState, useRef, useEffect } from 'react'
 import './App.css'
 import ConnectionStatus from './components/ConnectionStatus'
-import UserSetup from './components/UserSetup'
+import AuthPage from './components/AuthPage'
+import UserSettings from './components/UserSettings'
+import RoomSettings from './components/RoomSettings'
 import Messages from './components/Messages'
 import MessageInput from './components/MessageInput'
 import RoomControls from './components/RoomControls'
 import RoomList from './components/RoomList'
+import UserProfile from './components/UserProfile'
+import FriendList from './components/FriendList'
+import MemberList from './components/MemberList'
 
 const API_BASE_URL = 'http://localhost:6969'
 const SESSION_TOKEN_KEY = 'chat.sessionToken'
@@ -75,10 +80,12 @@ const parseServerMessage = (rawData) => {
     const text = normalizeNonEmptyString(parsed.payload.text);
     const username = normalizeNonEmptyString(parsed.payload.username) || 'anon';
     const createdAt = parsed.payload.createdAt || null;
+    const usernameColor = normalizeNonEmptyString(parsed.payload.usernameColor) || '#dcddde';
+    const profilePicture = normalizeNonEmptyString(parsed.payload.profilePicture) || null;
     if (!roomId || !text) return null;
     return {
       type: SERVER_EVENT_TYPES.ROOM_MESSAGE,
-      payload: { roomId, text, username, createdAt }
+      payload: { roomId, text, username, createdAt, usernameColor, profilePicture }
     };
   }
 
@@ -173,6 +180,12 @@ function App() {
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [typingByRoom, setTypingByRoom] = useState({});
   const [readReceiptsByRoom, setReadReceiptsByRoom] = useState({});
+  const [showUserSettings, setShowUserSettings] = useState(false);
+  const [showRoomSettings, setShowRoomSettings] = useState(null);
+  const [usernameColor, setUsernameColor] = useState('#dcddde');
+  const [profilePicture, setProfilePicture] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [viewingProfile, setViewingProfile] = useState(null);
 
   const clearStoredSession = () => {
     localStorage.removeItem(SESSION_TOKEN_KEY);
@@ -286,6 +299,8 @@ function App() {
             username: data.payload.username,
             text: data.payload.text,
             createdAt: data.payload.createdAt || new Date().toISOString(),
+            usernameColor: data.payload.usernameColor || '#dcddde',
+            profilePicture: data.payload.profilePicture || null,
           }]);
 
           if (data.payload.roomId && data.payload.roomId !== activeRoomRef.current) {
@@ -502,9 +517,9 @@ function App() {
     stopTyping(roomId);
   };
 
-  const registerUser = async () => {
-    const normalizedUsername = username.trim();
-    if (!normalizedUsername || !password) {
+  const registerUser = async (usernameInput, passwordInput) => {
+    const normalizedUsername = usernameInput.trim();
+    if (!normalizedUsername || !passwordInput) {
       setAuthError('Username and password are required');
       return;
     }
@@ -515,13 +530,16 @@ function App() {
       const response = await fetch(`${API_BASE_URL}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: normalizedUsername, password }),
+        body: JSON.stringify({ username: normalizedUsername, password: passwordInput }),
       });
 
       const body = await response.json();
       if (!response.ok) {
         throw new Error(body?.error || 'Registration failed');
       }
+      
+      // Auto-login after successful registration
+      await loginUser(normalizedUsername, passwordInput);
     } catch (error) {
       setAuthError(error.message || 'Registration failed');
     } finally {
@@ -529,9 +547,9 @@ function App() {
     }
   };
 
-  const loginUser = async () => {
-    const normalizedUsername = username.trim();
-    if (!normalizedUsername || !password) {
+  const loginUser = async (usernameInput, passwordInput) => {
+    const normalizedUsername = usernameInput.trim();
+    if (!normalizedUsername || !passwordInput) {
       setAuthError('Username and password are required');
       return;
     }
@@ -542,7 +560,7 @@ function App() {
       const response = await fetch(`${API_BASE_URL}/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: normalizedUsername, password }),
+        body: JSON.stringify({ username: normalizedUsername, password: passwordInput }),
       });
 
       const body = await response.json();
@@ -552,8 +570,9 @@ function App() {
 
       sessionTokenRef.current = body.token;
       setUserName(body.user.username);
+      setUsernameColor(body.user.usernameColor || '#dcddde');
+      setProfilePicture(body.user.profilePicture || null);
       storeSession(body.token, body.user.username);
-      setPassword('');
       SetUserSet(true);
       resetChatState();
       await fetchRooms(body.token);
@@ -596,6 +615,40 @@ function App() {
     }
   };
 
+  const logoutEverywhere = async () => {
+    const token = sessionTokenRef.current;
+    if (!token) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/logout-everywhere`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const body = await response.json();
+      if (!response.ok) {
+        setAuthError(body?.error || 'Logout everywhere failed');
+        return;
+      }
+
+      // Clear local state after successful server-side logout
+      sessionTokenRef.current = null;
+      clearStoredSession();
+      resetChatState();
+      SetUserSet(false);
+      setConnectionStatus('disconnected');
+
+      if (socketRef.current) {
+        socketRef.current.close();
+        socketRef.current = null;
+      }
+    } catch {
+      setAuthError('Logout everywhere failed');
+    }
+  };
+
   const fetchRooms = async (token) => {
     if (!token) return;
 
@@ -622,9 +675,14 @@ function App() {
             type: 'private', 
             inviteCode: room.inviteCode || null,
             isOwner: room.isOwner || false,
+            logo: room.logo || null,
           };
         } else {
-          nextConversations[room.roomId] = { type: 'public' };
+          nextConversations[room.roomId] = { 
+            type: 'public',
+            isOwner: room.isOwner || false,
+            logo: room.logo || null,
+          };
         }
       }
 
@@ -668,6 +726,8 @@ function App() {
         username: message.username,
         text: message.text,
         createdAt: message.createdAt,
+        usernameColor: message.usernameColor || '#dcddde',
+        profilePicture: message.profilePicture || null,
       }));
 
       const oldest = loadedMessages.length > 0
@@ -887,62 +947,208 @@ function App() {
 
   };
 
+  const updateProfile = async ({ usernameColor: newColor, profilePicture: newPfp }) => {
+    if (!sessionTokenRef.current) return;
+
+    setProfileLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/profile`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionTokenRef.current}`,
+        },
+        body: JSON.stringify({
+          usernameColor: newColor,
+          profilePicture: newPfp,
+        }),
+      });
+
+      const body = await response.json();
+      if (!response.ok) {
+        setAuthError(body?.error || 'Profile update failed');
+        return;
+      }
+
+      setUsernameColor(body.user.usernameColor || '#dcddde');
+      setProfilePicture(body.user.profilePicture || null);
+      setShowUserSettings(false);
+    } catch {
+      setAuthError('Profile update failed');
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const updateRoomSettings = async (roomIdToUpdate, { logo, description }) => {
+    if (!sessionTokenRef.current || !roomIdToUpdate) return;
+
+    setProfileLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/rooms/${encodeURIComponent(roomIdToUpdate)}/settings`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionTokenRef.current}`,
+        },
+        body: JSON.stringify({ logo, description }),
+      });
+
+      const body = await response.json();
+      if (!response.ok) {
+        setAuthError(body?.error || 'Room settings update failed');
+        return;
+      }
+
+      setConversations((prev) => ({
+        ...prev,
+        [roomIdToUpdate]: {
+          ...prev[roomIdToUpdate],
+          logo: body.room.logo || null,
+          description: body.room.description || '',
+        },
+      }));
+      setShowRoomSettings(null);
+    } catch {
+      setAuthError('Room settings update failed');
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const sendFriendRequest = async (targetUsername) => {
+    if (!sessionTokenRef.current) return;
+    const response = await fetch(`${API_BASE_URL}/friends/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionTokenRef.current}`,
+      },
+      body: JSON.stringify({ username: targetUsername }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to send friend request');
+    }
+    return data;
+  };
+
+  const removeFriend = async (targetUsername) => {
+    if (!sessionTokenRef.current) return;
+    const response = await fetch(`${API_BASE_URL}/friends/${encodeURIComponent(targetUsername)}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${sessionTokenRef.current}`,
+      },
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to remove friend');
+    }
+    return data;
+  };
+
+  const startDMWithUser = (targetUsername) => {
+    if (!username || !targetUsername) return;
+    const dmRoom = `dm:${[username, targetUsername].sort().join(':')}`;
+    setRoomId(dmRoom);
+    createRoom({ roomId: dmRoom, type: 'dm', members: targetUsername });
+  };
+
+  // Show auth page when not logged in
+  if (!userSet) {
+    return (
+      <AuthPage
+        onLogin={loginUser}
+        onRegister={registerUser}
+        loading={authLoading}
+        error={authError}
+      />
+    );
+  }
+
   return (
-    <div className="app-container">
+    <div className="flex flex-col h-screen w-full bg-surface-800 antialiased">
       <ConnectionStatus status={connectionStatus} />
 
-      <div className="chat-header">
-        <div className="chat-header-left">
-          <span className="room-icon">#</span>
-          <h2 className="room-title">{activeRoom || 'Select a room'}</h2>
+      {/* ── Top header ───────────────────────────────────────────── */}
+      <header className="flex items-center justify-between px-4 h-12 bg-surface-600 border-b border-surface-300 shadow-sm flex-shrink-0 z-10">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-content-muted text-lg font-bold select-none">#</span>
+          <h2 className="m-0 text-base font-semibold text-content-primary whitespace-nowrap overflow-hidden text-ellipsis">
+            {activeRoom || 'Select a room'}
+          </h2>
         </div>
-        {userSet && (
-          <div className="chat-header-right">
-            <button 
-              className="search-icon-btn" 
-              onClick={() => setShowSearchModal(true)}
-              title="Search messages"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M21.71 20.29L18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a1 1 0 0 0 1.42 0 1 1 0 0 0 0-1.39zM11 18a7 7 0 1 1 7-7 7 7 0 0 1-7 7z"/>
-              </svg>
-            </button>
-            <div className="user-avatar">{username.charAt(0).toUpperCase()}</div>
-            <span className="header-username">{username}</span>
-            <button className="logout-btn" onClick={logoutUser}>Logout</button>
-          </div>
-        )}
-      </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button
+            className="bg-transparent border-0 p-2 rounded text-content-muted cursor-pointer flex items-center justify-center transition-colors duration-100 hover:bg-surface-500 hover:text-content-normal"
+            onClick={() => setShowSearchModal(true)}
+            title="Search messages"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M21.71 20.29L18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a1 1 0 0 0 1.42 0 1 1 0 0 0 0-1.39zM11 18a7 7 0 1 1 7-7 7 7 0 0 1-7 7z"/>
+            </svg>
+          </button>
+          <button
+            className="w-8 h-8 rounded-full border-0 cursor-pointer flex items-center justify-center font-semibold text-sm text-white overflow-hidden transition-all duration-150 hover:scale-105 hover:ring-2 hover:ring-blurple p-0"
+            onClick={() => setShowUserSettings(true)}
+            title="User Settings"
+            style={{ backgroundColor: profilePicture ? 'transparent' : usernameColor }}
+          >
+            {profilePicture ? (
+              <img src={profilePicture} alt={username} className="w-full h-full object-cover" />
+            ) : (
+              username.charAt(0).toUpperCase()
+            )}
+          </button>
+          <span className="text-sm font-medium hidden sm:inline" style={{ color: usernameColor }}>{username}</span>
+          <button
+            className="px-3 py-1 bg-transparent border border-surface-300 text-content-normal text-xs rounded cursor-pointer transition-colors duration-100 hover:bg-status-red hover:border-status-red hover:text-white"
+            onClick={logoutUser}
+          >
+            Logout
+          </button>
+        </div>
+      </header>
 
+      {/* ── Search modal ─────────────────────────────────────────── */}
       {showSearchModal && (
-        <div className="search-modal-overlay" onClick={() => setShowSearchModal(false)}>
-          <div className="search-modal" onClick={(e) => e.stopPropagation()}>
-            <form onSubmit={searchMessages} className="search-input-wrapper">
-              <svg className="search-input-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+        <div
+          className="fixed inset-0 bg-black/70 flex justify-center pt-24 z-[1000]"
+          onClick={() => setShowSearchModal(false)}
+        >
+          <div
+            className="bg-surface-700 rounded-xl w-full max-w-[600px] max-h-[500px] flex flex-col shadow-[0_8px_32px_rgba(0,0,0,0.4)] overflow-hidden h-fit"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <form onSubmit={searchMessages} className="flex items-center gap-3 px-4 py-3 border-b border-surface-800">
+              <svg className="text-content-muted flex-shrink-0" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M21.71 20.29L18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a1 1 0 0 0 1.42 0 1 1 0 0 0 0-1.39zM11 18a7 7 0 1 1 7-7 7 7 0 0 1-7 7z"/>
               </svg>
               <input
                 type="text"
-                className="search-input"
+                className="flex-1 bg-transparent border-0 text-lg text-content-normal outline-none placeholder:text-content-muted"
                 placeholder="Search... @user #room or text"
                 value={smartSearch}
                 onChange={(e) => setSmartSearch(e.target.value)}
                 autoFocus
               />
-              {searchLoading && <span className="search-spinner"></span>}
+              {searchLoading && (
+                <span className="w-4 h-4 border-2 border-surface-800 border-t-blurple rounded-full animate-spin flex-shrink-0" />
+              )}
             </form>
-            <div className="search-hints">
-              <span><code>@username</code> search by user</span>
-              <span><code>#room</code> search in room</span>
-              <span><code>text</code> search messages</span>
+            <div className="flex gap-4 px-4 py-2 text-xs text-content-muted bg-surface-800">
+              <span><code className="bg-surface-700 px-1.5 py-0.5 rounded text-blurple font-mono">@username</code> user</span>
+              <span><code className="bg-surface-700 px-1.5 py-0.5 rounded text-blurple font-mono">#room</code> room</span>
+              <span><code className="bg-surface-700 px-1.5 py-0.5 rounded text-blurple font-mono">text</code> messages</span>
             </div>
-            {searchError && <div className="search-error">{searchError}</div>}
+            {searchError && <p className="px-4 py-3 text-status-red text-sm m-0">{searchError}</p>}
             {searchResults.length > 0 && (
-              <ul className="search-results-list">
+              <ul className="list-none p-0 m-0 overflow-y-auto flex-1">
                 {searchResults.map((result, index) => (
-                  <li 
+                  <li
                     key={`${result.roomId}-${index}`}
-                    className="search-result-item"
+                    className="px-4 py-3 cursor-pointer border-b border-surface-800 transition-colors duration-100 hover:bg-surface-500"
                     onClick={() => {
                       setActiveRoom(result.roomId);
                       setRoomId(result.roomId);
@@ -950,64 +1156,63 @@ function App() {
                       setShowSearchModal(false);
                     }}
                   >
-                    <div className="search-result-header">
-                      <span className="search-result-room">#{result.roomId}</span>
-                      <span className="search-result-user">@{result.username}</span>
+                    <div className="flex gap-2 mb-1">
+                      <span className="font-semibold text-content-secondary text-xs">#{result.roomId}</span>
+                      <span className="text-content-muted text-xs">@{result.username}</span>
                     </div>
-                    <div className="search-result-text">{result.text}</div>
+                    <div className="text-content-normal text-sm whitespace-nowrap overflow-hidden text-ellipsis">{result.text}</div>
                   </li>
                 ))}
               </ul>
             )}
             {!searchLoading && searchResults.length === 0 && smartSearch.trim() && !searchError && (
-              <div className="search-empty">Press Enter to search</div>
+              <p className="p-4 text-center text-content-muted text-sm m-0">Press Enter to search</p>
             )}
           </div>
         </div>
       )}
 
-      <div className="chat-area">
-        <div className="left-column">
-          <UserSetup
-            userSet={userSet}
-            username={username}
-            password={password}
-            authLoading={authLoading}
-            authError={authError}
-            onUsernameChange={setUserName}
-            onPasswordChange={setPassword}
-            onRegister={registerUser}
-            onLogin={loginUser}
-          />
+      {showUserSettings && (
+        <UserSettings
+          username={username}
+          usernameColor={usernameColor}
+          profilePicture={profilePicture}
+          onUpdateProfile={updateProfile}
+          onLogoutEverywhere={logoutEverywhere}
+          onClose={() => setShowUserSettings(false)}
+          loading={profileLoading}
+        />
+      )}
 
-          <Messages
-            messages={messages}
-            activeRoom={activeRoom}
-            typingUsers={(typingByRoom[activeRoom] || []).filter((name) => name !== username)}
-            readBy={Object.entries(readReceiptsByRoom[activeRoom] || {})
-              .filter(([name]) => name !== username)
-              .sort((a, b) => b[1] - a[1])
-              .map(([name]) => name)}
-            onLoadOlder={() => {
-              const meta = historyMetaRef.current.get(activeRoom);
-              if (!meta?.oldest) return;
-              loadRoomHistory(activeRoom, { before: meta.oldest });
-            }}
-            hasMore={Boolean(hasMoreByRoom[activeRoom])}
-            loadingHistory={Boolean(historyLoadingByRoom[activeRoom])}
-          />
+      {showRoomSettings && (
+        <RoomSettings
+          roomId={showRoomSettings.roomId}
+          currentLogo={showRoomSettings.logo}
+          currentDescription={showRoomSettings.description}
+          onUpdateRoomSettings={updateRoomSettings}
+          onClose={() => setShowRoomSettings(null)}
+          loading={profileLoading}
+        />
+      )}
 
-          <MessageInput
-            message={message}
-            onMessageChange={handleMessageChange}
-            onSendMessage={sendMessage}
-            onStopTyping={() => stopTyping(roomId)}
-            activeRoom={activeRoom}
-          />
-        </div>
+      {viewingProfile && (
+        <UserProfile
+          username={viewingProfile}
+          sessionToken={sessionTokenRef.current}
+          onSendFriendRequest={sendFriendRequest}
+          onRemoveFriend={removeFriend}
+          onClose={() => setViewingProfile(null)}
+        />
+      )}
 
-        <div className="right-sidebar">
-          <h3>Rooms</h3>
+      {/* ── Three-column layout ───────────────────────────────── */}
+      <div className="flex flex-1 min-h-0">
+
+        {/* Left sidebar */}
+        <aside className="w-60 min-w-[240px] bg-surface-700 flex flex-col overflow-y-auto border-r border-surface-300 flex-shrink-0">
+          <h3 className="px-4 m-0 text-xs font-semibold text-content-secondary uppercase tracking-wider h-12 flex items-center border-b border-surface-800 flex-shrink-0">
+            Rooms
+          </h3>
 
           <RoomControls
             roomId={roomId}
@@ -1032,17 +1237,62 @@ function App() {
             unreadCounts={unreadCounts}
             onKickMember={kickMember}
             onBanMember={banMember}
+            onOpenRoomSettings={(roomId, info) => {
+              setShowRoomSettings({ roomId, logo: info.logo || null, description: info.description || '' });
+            }}
             onRoomSelect={(id) => {
               setActiveRoom(id);
               setRoomId(id);
               joinRoom(id);
-              setUnreadCounts(prev => ({
-                ...prev,
-                [id]: 0
-              }));
+              setUnreadCounts(prev => ({ ...prev, [id]: 0 }));
             }}
           />
-        </div>
+
+          <FriendList
+            sessionToken={sessionTokenRef.current}
+            onViewProfile={setViewingProfile}
+            onStartDM={startDMWithUser}
+            currentUsername={username}
+          />
+        </aside>
+
+        {/* Main chat column */}
+        <main className="flex-1 flex flex-col bg-surface-600 overflow-hidden min-w-0">
+          <Messages
+            messages={messages}
+            activeRoom={activeRoom}
+            typingUsers={(typingByRoom[activeRoom] || []).filter((name) => name !== username)}
+            readBy={Object.entries(readReceiptsByRoom[activeRoom] || {})
+              .filter(([name]) => name !== username)
+              .sort((a, b) => b[1] - a[1])
+              .map(([name]) => name)}
+            onLoadOlder={() => {
+              const meta = historyMetaRef.current.get(activeRoom);
+              if (!meta?.oldest) return;
+              loadRoomHistory(activeRoom, { before: meta.oldest });
+            }}
+            hasMore={Boolean(hasMoreByRoom[activeRoom])}
+            loadingHistory={Boolean(historyLoadingByRoom[activeRoom])}
+          />
+
+          <MessageInput
+            message={message}
+            onMessageChange={handleMessageChange}
+            onSendMessage={sendMessage}
+            onStopTyping={() => stopTyping(roomId)}
+            activeRoom={activeRoom}
+          />
+        </main>
+
+        {/* Right members sidebar */}
+        <aside className="w-60 bg-surface-700 border-l border-surface-300 flex flex-col overflow-y-auto flex-shrink-0 hidden xl:flex">
+          <MemberList
+            roomId={activeRoom}
+            sessionToken={sessionTokenRef.current}
+            onViewProfile={setViewingProfile}
+            currentUsername={username}
+          />
+        </aside>
       </div>
     </div>
   );

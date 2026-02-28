@@ -209,3 +209,195 @@ ws.onerror = () => setStatus('error');
 - User joins room and sends messages.
 - Server validates access, broadcasts events, and persists history.
 - Client supports typing/read receipts/search/pagination/moderation.
+
+---
+
+## 14) User Customization (Color & Profile Picture)
+- **What this feature does:** lets users set a custom username color and profile picture.
+- **Why this exists:** personalization makes chat more engaging and helps identify users visually.
+- **How it works:** user settings modal allows color picker and image URL/upload; stored in user document; sent with every message.
+- **Technologies:** React (color picker, image upload), Express PATCH endpoint, MongoDB user schema.
+- **Where logic lives:** client (settings UI), server (update endpoint), database (`users.usernameColor`, `users.profilePicture`).
+- **Example:** user sets purple color and avatar; all their messages display with that style.
+- **Interview:** "I added per-user customization stored in MongoDB. The color and avatar are fetched during message history and included in real-time payloads for consistent display."
+- **Minimal code syntax:**
+```js
+// PATCH /profile
+await User.findByIdAndUpdate(userId, {
+  usernameColor: '#7c3aed',
+  profilePicture: 'data:image/png;base64,...'
+});
+```
+
+## 15) Room Customization (Logo & Description)
+- **What this feature does:** room owners can set a logo and description for their room.
+- **Why this exists:** branding and context help users understand room purpose.
+- **How it works:** room settings modal for owners; `logo` and `description` fields in Room schema; displayed in room list and member sidebar.
+- **Technologies:** React modal, Express PATCH endpoint, MongoDB room schema.
+- **Where logic lives:** client (settings UI), server (owner-only update), database (`rooms.logo`, `rooms.description`).
+- **Example:** "Project Alpha" room has company logo and "Sprint planning discussions" description.
+- **Interview:** "Room customization is owner-restricted. I added logo and description fields, and the member list sidebar shows the description for context."
+- **Minimal code syntax:**
+```js
+// PATCH /rooms/:roomId/settings
+if (room.createdBy !== userId) return 403;
+await Room.findOneAndUpdate({ roomId }, {
+  logo: '...', description: 'Sprint planning discussions'
+});
+```
+
+## 16) Friend System (Add, Accept, Reject, Remove)
+- **What this feature does:** users can send/accept/reject friend requests and see friends with online status.
+- **Why this exists:** social features help users connect and quickly DM friends.
+- **How it works:** `friends` array and `friendRequests` array in User schema; API endpoints handle request flow; friend list shows online/offline grouping.
+- **Technologies:** React FriendList component, Express REST endpoints, MongoDB user relations.
+- **Where logic lives:** client (friend list UI), server (request logic), database (`users.friends`, `users.friendRequests`).
+- **Example:** Alice sends request to Bob; Bob accepts; both see each other in friend list with online status.
+- **Interview:** "I built a mutual friend system with request/accept flow. If Alice requests Bob while Bob already requested Alice, it auto-accepts. Online status is tracked via WebSocket connections."
+- **Minimal code syntax:**
+```js
+// POST /friends/request - auto-accept if mutual
+if (currentUser.friendRequests.includes(targetUser._id)) {
+  // Add each other as friends
+  await User.updateOne({ _id: userId }, { $push: { friends: targetId } });
+}
+```
+
+## 17) Online Status Tracking
+- **What this feature does:** tracks which users are online/offline in real-time.
+- **Why this exists:** helps users know if friends/members are available.
+- **How it works:** `onlineUsers` Map tracks userId -> Set of sockets; on connect, add to set and set status 'online'; on last disconnect, set 'offline'.
+- **Technologies:** Node.js Map, WebSocket lifecycle, MongoDB user status field.
+- **Where logic lives:** server (state.js + ws.js), database (`users.status`).
+- **Example:** Bob connects from phone and laptop; both disconnect; status changes to offline.
+- **Interview:** "I track online status per-socket, supporting multiple connections. Database status updates only when first/last socket connects/disconnects."
+- **Minimal code syntax:**
+```js
+// ws.js on connect
+if (!onlineUsers.has(userId)) {
+  onlineUsers.set(userId, new Set());
+  await User.updateOne({ _id: userId }, { status: 'online' });
+}
+onlineUsers.get(userId).add(ws);
+```
+
+## 18) User Profiles (Bio, Status, Join Date)
+- **What this feature does:** viewable user profiles with bio, custom status, and join date.
+- **Why this exists:** provides context about who you're chatting with.
+- **How it works:** `GET /users/:username` returns profile data; UserProfile modal displays it; click username to view.
+- **Technologies:** React UserProfile component, Express endpoint, MongoDB user fields.
+- **Where logic lives:** client (profile modal), server (fetch endpoint), database (`users.bio`, `users.customStatus`, `users.createdAt`).
+- **Example:** click a username to see "Full-stack developer | Member since January 2024".
+- **Interview:** "User profiles include bio (200 chars), custom status (50 chars), and join date. The endpoint also indicates if you're friends for showing friend/unfriend actions."
+- **Minimal code syntax:**
+```js
+// GET /users/:username
+const user = await User.findOne({ username });
+return { username, bio, status, customStatus, createdAt, isFriend };
+```
+
+## 19) Member List Sidebar
+- **What this feature does:** shows all members in the current room with online status.
+- **Why this exists:** see who's in the room and who's available.
+- **How it works:** `GET /rooms/:roomId/members` returns member list with status; MemberList component displays grouped by online/offline.
+- **Technologies:** React MemberList component, Express endpoint, MongoDB room members.
+- **Where logic lives:** client (sidebar), server (member lookup), database (`rooms.members`).
+- **Example:** sidebar shows "Online — 3: Alice 👑, Bob, Charlie" and "Offline — 2: Dave, Eve".
+- **Interview:** "The member sidebar fetches room members with their online status. Room owner gets a crown badge. Members are sorted: owner first, then online, then alphabetically."
+- **Minimal code syntax:**
+```js
+// GET /rooms/:roomId/members
+const members = await User.find({ _id: { $in: room.members } });
+return members.map(m => ({
+  username: m.username,
+  status: onlineUsers.has(m._id) ? 'online' : 'offline',
+  isOwner: m._id.equals(room.owner)
+}));
+```
+
+## 20) Logout Everywhere (Session Invalidation)
+- **What this feature does:** invalidates all active sessions for the user.
+- **Why this exists:** security feature if account is compromised or logging out from shared devices.
+- **How it works:** `POST /logout-everywhere` deletes all sessions for user except current (optional); client clears token.
+- **Technologies:** Express endpoint, MongoDB session deletion.
+- **Where logic lives:** server (session management), database (`sessions`).
+- **Example:** user clicks "Logout Everywhere" → all other devices are signed out.
+- **Interview:** "I added a bulk session invalidation endpoint. It deletes all session documents for the user from MongoDB, immediately revoking access on all devices."
+- **Minimal code syntax:**
+```js
+// POST /logout-everywhere
+await Session.deleteMany({ userId: identity.userId });
+```
+
+## 21) Input Sanitization (XSS Prevention)
+- **What this feature does:** sanitizes all user input to prevent cross-site scripting attacks.
+- **Why this exists:** security is critical; malicious scripts could hijack sessions or steal data.
+- **How it works:** backend strips dangerous patterns (javascript:, event handlers, script tags); frontend escapes HTML for display.
+- **Technologies:** Custom sanitize utilities (backend + frontend), regex patterns.
+- **Where logic lives:** server (`utils/sanitize.js` - stripDangerousPatterns), client (`utils/sanitize.js` - escapeHtml, linkifyText).
+- **Example:** user sends `<script>alert('xss')</script>` → stored and displayed as plain text.
+- **Interview:** "I implemented defense-in-depth: backend strips dangerous patterns before storage, frontend escapes for display. URLs are safely converted to clickable links with proper escaping."
+- **Minimal code syntax:**
+```js
+// Backend sanitization
+const sanitizeMessage = (text) => {
+  return text
+    .replace(/<script\b[^<]*<\/script>/gi, '')
+    .replace(/javascript\s*:/gi, '')
+    .replace(/on\w+\s*=/gi, '');
+};
+
+// Frontend display
+const escapeHtml = (str) => str.replace(/[<>"'&]/g, char => htmlEntities[char]);
+```
+
+## 22) End-to-End Encryption (E2E)
+- **What this feature does:** encrypts messages client-side so server cannot read content.
+- **Why this exists:** privacy protection; even if server is compromised, messages stay private.
+- **How it works:** users generate RSA key pair; public key stored on server; messages encrypted with AES-256-GCM; symmetric key encrypted per-recipient with their public key.
+- **Technologies:** Web Crypto API (RSA-OAEP, AES-GCM, PBKDF2), React hooks, MongoDB fields.
+- **Where logic lives:** client (encryption/decryption), server (stores encrypted data), database (`users.publicKey`, `messages.isEncrypted`, `messages.iv`, `messages.encryptedKeys`).
+- **Example:** Alice sends encrypted message to Bob; only Bob's private key can decrypt it.
+- **Interview:** "I implemented E2E encryption using Web Crypto API. Each message uses a random AES-256-GCM key, which is then RSA-encrypted for each recipient. Private keys are protected with password-derived keys using PBKDF2."
+- **Minimal code syntax:**
+```js
+// Encrypt message
+const aesKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt']);
+const iv = crypto.getRandomValues(new Uint8Array(12));
+const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, plaintext);
+
+// Encrypt AES key for recipient
+const encryptedKey = await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, recipientPublicKey, aesKey);
+```
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌────────────────┐
+│   React App     │────▶│  Express Server  │────▶│    MongoDB     │
+│  (Vite + React) │◀────│  (Node.js + WS)  │◀────│   (Mongoose)   │
+└─────────────────┘     └──────────────────┘     └────────────────┘
+        │                       │
+        │ WebSocket             │ REST API
+        │ (real-time)           │ (auth, rooms, users)
+        ▼                       ▼
+   ┌─────────┐           ┌─────────────┐
+   │ Messages│           │   Sessions  │
+   │ Typing  │           │   Users     │
+   │ Receipts│           │   Rooms     │
+   └─────────┘           └─────────────┘
+```
+
+## Key Interview Talking Points
+
+1. **Real-time Architecture**: "I used WebSocket for real-time features (messages, typing, receipts) and REST for CRUD operations. This separation keeps concerns clear."
+
+2. **Security Layers**: "Multiple security layers: session-based auth, input sanitization, E2E encryption option, owner-only moderation."
+
+3. **State Management**: "Server-side state uses Maps for WebSocket connections, room membership, and online tracking. React state handles UI with refs for values needed in callbacks."
+
+4. **Database Design**: "MongoDB with Mongoose for flexible schemas. Users, Sessions, Rooms, and Messages collections with proper indexing on frequently queried fields."
+
+5. **Scalability Considerations**: "For scaling, I'd add Redis for session storage and pub/sub for multi-server WebSocket broadcasting."
