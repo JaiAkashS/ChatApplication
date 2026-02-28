@@ -27,6 +27,20 @@ const messageSchema = new mongoose.Schema({
         required: true,
         trim: true,
     },
+    isEncrypted: {
+        type: Boolean,
+        default: false,
+    },
+    iv: {
+        type: String,
+        default: null,
+    },
+    encryptedKeys: {
+        // Maps username to their encrypted symmetric key
+        type: Map,
+        of: String,
+        default: null,
+    },
     createdAt: {
         type: Date,
         default: Date.now,

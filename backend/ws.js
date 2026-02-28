@@ -1,11 +1,13 @@
 const WebSocket = require('ws');
 
 const Room = require('./models/Room');
+const User = require('./models/User');
 const { MESSAGE_TYPES } = require('./constants');
 const { parseTokenFromRequest, resolveAuthenticatedIdentity } = require('./auth');
 const { sendEvent } = require('./wsUtils');
-const { rooms, socketMeta } = require('./state');
+const { rooms, socketMeta, onlineUsers } = require('./state');
 const { isPlainObject, normalizeNonEmptyString } = require('./utils/strings');
+const { sanitizeMessage, sanitizeRoomId } = require('./utils/sanitize');
 const { canJoinRoom } = require('./services/rooms');
 const {
     persistMessage,
@@ -29,9 +31,11 @@ const parseClientMessage = (raw) => {
     if (parsed.type === MESSAGE_TYPES.JOIN_ROOM) {
         const roomId = normalizeNonEmptyString(parsed.payload.roomId);
         if (!roomId) return null;
+        const sanitizedRoomId = sanitizeRoomId(roomId);
+        if (!sanitizedRoomId) return null;
         return {
             type: MESSAGE_TYPES.JOIN_ROOM,
-            payload: { roomId },
+            payload: { roomId: sanitizedRoomId },
         };
     }
 
@@ -39,9 +43,25 @@ const parseClientMessage = (raw) => {
         const roomId = normalizeNonEmptyString(parsed.payload.roomId);
         const text = normalizeNonEmptyString(parsed.payload.text);
         if (!roomId || !text) return null;
+        const sanitizedRoomId = sanitizeRoomId(roomId);
+        if (!sanitizedRoomId) return null;
+
+        // E2E encryption fields (optional)
+        const isEncrypted = parsed.payload.isEncrypted === true;
+        const iv = isEncrypted ? normalizeNonEmptyString(parsed.payload.iv) : null;
+        const encryptedKeys = isEncrypted && isPlainObject(parsed.payload.encryptedKeys)
+            ? parsed.payload.encryptedKeys
+            : null;
+
         return {
             type: MESSAGE_TYPES.SEND_MESSAGE,
-            payload: { roomId, text },
+            payload: {
+                roomId: sanitizedRoomId,
+                text,
+                isEncrypted,
+                iv,
+                encryptedKeys,
+            },
         };
     }
 
@@ -49,18 +69,22 @@ const parseClientMessage = (raw) => {
         const roomId = normalizeNonEmptyString(parsed.payload.roomId);
         const isTyping = typeof parsed.payload.isTyping === 'boolean' ? parsed.payload.isTyping : null;
         if (!roomId || isTyping === null) return null;
+        const sanitizedRoomId = sanitizeRoomId(roomId);
+        if (!sanitizedRoomId) return null;
         return {
             type: MESSAGE_TYPES.TYPING,
-            payload: { roomId, isTyping },
+            payload: { roomId: sanitizedRoomId, isTyping },
         };
     }
 
     if (parsed.type === MESSAGE_TYPES.READ_RECEIPT) {
         const roomId = normalizeNonEmptyString(parsed.payload.roomId);
         if (!roomId) return null;
+        const sanitizedRoomId = sanitizeRoomId(roomId);
+        if (!sanitizedRoomId) return null;
         return {
             type: MESSAGE_TYPES.READ_RECEIPT,
-            payload: { roomId },
+            payload: { roomId: sanitizedRoomId },
         };
     }
 
@@ -84,12 +108,28 @@ const setupWebSocket = (server) => {
                 return;
             }
 
+            // Fetch user customization data
+            const userData = await User.findById(identity.userId).lean();
+            const usernameColor = userData?.usernameColor || '#dcddde';
+            const profilePicture = userData?.profilePicture || null;
+
             socketMeta.set(ws, {
                 userId: identity.userId,
                 username: identity.username,
+                usernameColor,
+                profilePicture,
                 token,
                 rooms: new Set(),
             });
+
+            // Track online status
+            const userIdStr = identity.userId.toString();
+            if (!onlineUsers.has(userIdStr)) {
+                onlineUsers.set(userIdStr, new Set());
+                // First connection - set user online
+                await User.updateOne({ _id: identity.userId }, { $set: { status: 'online' } });
+            }
+            onlineUsers.get(userIdStr).add(ws);
 
             ws.on('message', async (data) => {
                 const meta = socketMeta.get(ws);
@@ -123,10 +163,12 @@ const setupWebSocket = (server) => {
                     meta.rooms.add(roomId);
                     await Room.updateOne({ roomId }, { $set: { updatedAt: new Date() } });
 
-                    sendEvent(ws, MESSAGE_TYPES.ACK, { text: `Joined room ${roomId}` });
+                    const isDM = roomId.startsWith('dm:');
+                    const displayRoom = isDM ? 'dm' : roomId;
+                    sendEvent(ws, MESSAGE_TYPES.ACK, { text: `Joined room ${displayRoom}` });
 
                     const room = rooms.get(roomId);
-                    const text = `${meta.username} joined ${roomId}`;
+                    const text = `${meta.username} joined ${displayRoom}`;
                     const createdAt = new Date().toISOString();
                     await persistMessage({
                         roomId,
@@ -143,7 +185,7 @@ const setupWebSocket = (server) => {
                 }
 
                 if (message.type === MESSAGE_TYPES.SEND_MESSAGE) {
-                    const { roomId, text } = message.payload;
+                    const { roomId, text: rawText, isEncrypted, iv, encryptedKeys } = message.payload;
 
                     if (!meta.rooms.has(roomId)) {
                         return;
@@ -151,6 +193,14 @@ const setupWebSocket = (server) => {
 
                     const room = rooms.get(roomId);
                     if (!room) return;
+
+                    // For encrypted messages, store as-is (already encrypted client-side)
+                    // For plain messages, sanitize to prevent XSS
+                    const text = isEncrypted ? rawText : sanitizeMessage(rawText);
+                    if (!text) {
+                        sendEvent(ws, MESSAGE_TYPES.ERR_ACK, { text: 'Invalid message content' });
+                        return;
+                    }
 
                     await Room.updateOne({ roomId }, { $set: { updatedAt: new Date() } });
 
@@ -160,6 +210,9 @@ const setupWebSocket = (server) => {
                         username: meta.username,
                         type: MESSAGE_TYPES.ROOM_MESSAGE,
                         text,
+                        isEncrypted,
+                        iv,
+                        encryptedKeys,
                     });
 
                     const createdAt = new Date().toISOString();
@@ -168,7 +221,12 @@ const setupWebSocket = (server) => {
                             roomId,
                             text,
                             username: meta.username,
+                            usernameColor: meta.usernameColor || '#dcddde',
+                            profilePicture: meta.profilePicture || null,
                             createdAt,
+                            isEncrypted,
+                            iv,
+                            encryptedKeys,
                         });
                     }
                 }
@@ -232,6 +290,18 @@ const setupWebSocket = (server) => {
             ws.on('close', async () => {
                 const meta = socketMeta.get(ws);
                 if (!meta) return;
+
+                // Track online status
+                const userIdStr = meta.userId.toString();
+                const userSockets = onlineUsers.get(userIdStr);
+                if (userSockets) {
+                    userSockets.delete(ws);
+                    if (userSockets.size === 0) {
+                        onlineUsers.delete(userIdStr);
+                        // Last connection closed - set user offline
+                        await User.updateOne({ _id: meta.userId }, { $set: { status: 'offline' } });
+                    }
+                }
 
                 for (const roomId of meta.rooms) {
                     const room = rooms.get(roomId);

@@ -1,8 +1,16 @@
 const Message = require('../models/Message');
 const { typingTimers, readReceipts } = require('../state');
 
-const persistMessage = async ({ roomId, userId, username, type, text }) => {
-    await Message.create({ roomId, userId, username, type, text });
+const persistMessage = async ({ roomId, userId, username, type, text, isEncrypted = false, iv = null, encryptedKeys = null }) => {
+    const messageData = { roomId, userId, username, type, text };
+
+    if (isEncrypted) {
+        messageData.isEncrypted = true;
+        messageData.iv = iv;
+        messageData.encryptedKeys = encryptedKeys;
+    }
+
+    await Message.create(messageData);
 };
 
 const getRoomTypingMap = (roomId) => {

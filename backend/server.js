@@ -7,6 +7,7 @@ const { MONGO_URI, PORT } = require('./config');
 const authRoutes = require('./routes/auth');
 const roomsRoutes = require('./routes/rooms');
 const searchRoutes = require('./routes/search');
+const usersRoutes = require('./routes/users');
 const { setupWebSocket } = require('./ws');
 
 const app = express();
@@ -24,6 +25,7 @@ app.get('/health', (_req, res) => {
 app.use(authRoutes);
 app.use(roomsRoutes);
 app.use(searchRoutes);
+app.use(usersRoutes);
 
 const httpServer = http.createServer(app);
 setupWebSocket(httpServer);

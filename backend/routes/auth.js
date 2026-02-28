@@ -79,6 +79,8 @@ router.post('/login', async (req, res) => {
             user: {
                 id: user._id,
                 username: user.username,
+                usernameColor: user.usernameColor || '#dcddde',
+                profilePicture: user.profilePicture || null,
             },
         });
     } catch (error) {
@@ -105,6 +107,106 @@ router.post('/logout', async (req, res) => {
         return res.status(200).json({ ok: true });
     } catch (error) {
         console.error('Logout error:', error);
+        return res.status(500).json({ error: 'internal server error' });
+    }
+});
+
+router.post('/logout-everywhere', async (req, res) => {
+    try {
+        const token = getAuthTokenFromRequest(req);
+        if (!token) {
+            return res.status(401).json({ error: 'missing session token' });
+        }
+
+        // Get the current session to find userId
+        const currentSession = await Session.findOne({ token, expiresAt: { $gt: new Date() } });
+        if (!currentSession) {
+            return res.status(401).json({ error: 'invalid or expired session' });
+        }
+
+        const userId = currentSession.userId;
+
+        // Get all session tokens for this user before deleting
+        const userSessions = await Session.find({ userId }).lean();
+        const sessionTokens = new Set(userSessions.map((s) => s.token));
+
+        // Delete all sessions for this user
+        const deleteResult = await Session.deleteMany({ userId });
+
+        // Disconnect all active sockets for this user's sessions
+        let disconnectedCount = 0;
+        for (const [socket, meta] of socketMeta.entries()) {
+            if (meta?.token && sessionTokens.has(meta.token)) {
+                socket.close(1008, 'All sessions revoked');
+                disconnectedCount++;
+            }
+        }
+
+        return res.status(200).json({
+            ok: true,
+            sessionsRevoked: deleteResult.deletedCount,
+            socketsDisconnected: disconnectedCount,
+        });
+    } catch (error) {
+        console.error('Logout everywhere error:', error);
+        return res.status(500).json({ error: 'internal server error' });
+    }
+});
+
+router.patch('/profile', async (req, res) => {
+    try {
+        const token = getAuthTokenFromRequest(req);
+        if (!token) {
+            return res.status(401).json({ error: 'missing session token' });
+        }
+
+        const session = await Session.findOne({ token, expiresAt: { $gt: new Date() } });
+        if (!session) {
+            return res.status(401).json({ error: 'invalid or expired session' });
+        }
+
+        const updates = {};
+
+        if (req.body?.usernameColor !== undefined) {
+            const color = normalizeNonEmptyString(req.body.usernameColor);
+            if (color && /^#[0-9A-Fa-f]{6}$/.test(color)) {
+                updates.usernameColor = color;
+            }
+        }
+
+        if (req.body?.profilePicture !== undefined) {
+            const pfp = normalizeNonEmptyString(req.body.profilePicture);
+            if (pfp === null || pfp === '') {
+                updates.profilePicture = null;
+            } else if (pfp && (pfp.startsWith('http://') || pfp.startsWith('https://') || pfp.startsWith('data:image/'))) {
+                updates.profilePicture = pfp;
+            }
+        }
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ error: 'no valid fields to update' });
+        }
+
+        const user = await User.findByIdAndUpdate(
+            session.userId,
+            { $set: updates },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ error: 'user not found' });
+        }
+
+        return res.status(200).json({
+            user: {
+                id: user._id,
+                username: user.username,
+                usernameColor: user.usernameColor || '#dcddde',
+                profilePicture: user.profilePicture || null,
+            },
+        });
+    } catch (error) {
+        console.error('Profile update error:', error);
         return res.status(500).json({ error: 'internal server error' });
     }
 });

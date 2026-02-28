@@ -13,6 +13,17 @@ const roomSchema = new mongoose.Schema({
         required: true,
         default: 'public',
     },
+    description: {
+        type: String,
+        default: '',
+        trim: true,
+        maxlength: 500,
+    },
+    logo: {
+        type: String,
+        default: null,
+        trim: true,
+    },
     inviteCode: {
         type: String,
         unique: true,
