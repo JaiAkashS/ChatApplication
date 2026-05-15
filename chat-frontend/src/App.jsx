@@ -1,18 +1,18 @@
-import { useState, useRef, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
-import ConnectionStatus from './components/ConnectionStatus'
 import AuthPage from './components/AuthPage'
-import UserSettings from './components/UserSettings'
-import RoomSettings from './components/RoomSettings'
-import Messages from './components/Messages'
-import MessageInput from './components/MessageInput'
-import RoomControls from './components/RoomControls'
-import RoomList from './components/RoomList'
-import UserProfile from './components/UserProfile'
+import ConnectionStatus from './components/ConnectionStatus'
 import FriendList from './components/FriendList'
 import MemberList from './components/MemberList'
+import MessageInput from './components/MessageInput'
+import Messages from './components/Messages'
+import RoomControls from './components/RoomControls'
+import RoomList from './components/RoomList'
+import RoomSettings from './components/RoomSettings'
+import UserProfile from './components/UserProfile'
+import UserSettings from './components/UserSettings'
 
-const API_BASE_URL = 'http://localhost:6969'
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:6969'
 const SESSION_TOKEN_KEY = 'chat.sessionToken'
 const SESSION_USERNAME_KEY = 'chat.username'
 const HISTORY_PAGE_SIZE = 50
@@ -537,7 +537,7 @@ function App() {
       if (!response.ok) {
         throw new Error(body?.error || 'Registration failed');
       }
-      
+
       // Auto-login after successful registration
       await loginUser(normalizedUsername, passwordInput);
     } catch (error) {
@@ -671,14 +671,14 @@ function App() {
           const other = (room.members || []).find((name) => name !== username) || 'unknown';
           nextConversations[room.roomId] = { type: 'dm', with: other };
         } else if (room.type === 'private') {
-          nextConversations[room.roomId] = { 
-            type: 'private', 
+          nextConversations[room.roomId] = {
+            type: 'private',
             inviteCode: room.inviteCode || null,
             isOwner: room.isOwner || false,
             logo: room.logo || null,
           };
         } else {
-          nextConversations[room.roomId] = { 
+          nextConversations[room.roomId] = {
             type: 'public',
             isOwner: room.isOwner || false,
             logo: room.logo || null,
@@ -850,9 +850,9 @@ function App() {
     let roomId = '';
     let username = '';
     let text = '';
-    
+
     const tokens = query.match(/(@\S+|#\S+|[^@#]+)/g) || [];
-    
+
     for (const token of tokens) {
       const trimmed = token.trim();
       if (trimmed.startsWith('@')) {
@@ -863,7 +863,7 @@ function App() {
         text += (text ? ' ' : '') + trimmed;
       }
     }
-    
+
     return { roomId, username, text: text.trim() };
   };
 
